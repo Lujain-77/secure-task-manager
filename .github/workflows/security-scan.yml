@@ -1,0 +1,169 @@
+name: Security Scans
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+
+  trufflehog:
+    name: TruffleHog Secret Scan
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/repo" \
+            -w /repo \
+            trufflesecurity/trufflehog:latest \
+            filesystem /repo \
+            --json > trufflehog-report.json 2>&1 || true
+
+          echo "TruffleHog scan completed."
+
+      - name: Upload TruffleHog report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trufflehog-report
+          path: trufflehog-report.json
+          if-no-files-found: warn
+
+
+  bandit:
+    name: Bandit Python Security Scan
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Bandit
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit
+
+      - name: Run Bandit
+        run: |
+          bandit -r backend \
+            -f txt \
+            -o bandit-report.txt || true
+
+          echo "Bandit scan completed."
+
+      - name: Upload Bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.txt
+          if-no-files-found: warn
+
+
+  hadolint:
+    name: Hadolint Dockerfile Scan
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint on backend Dockerfile
+        run: |
+          docker run --rm \
+            -i \
+            hadolint/hadolint:latest \
+            < backend/Dockerfile \
+            > hadolint-backend-report.txt 2>&1 || true
+
+      - name: Run Hadolint on frontend Dockerfile
+        run: |
+          docker run --rm \
+            -i \
+            hadolint/hadolint:latest \
+            < frontend/Dockerfile \
+            > hadolint-frontend-report.txt 2>&1 || true
+
+          echo "Hadolint scan completed."
+
+      - name: Upload Hadolint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hadolint-reports
+          path: |
+            hadolint-backend-report.txt
+            hadolint-frontend-report.txt
+          if-no-files-found: warn
+
+
+  trivy:
+    name: Trivy Container Vulnerability Scan
+    runs-on: self-hosted
+
+    steps:
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io \
+            -u ${{ github.actor }} \
+            --password-stdin
+
+      - name: Pull backend image
+        run: |
+          docker pull ghcr.io/lujain-77/secure-task-manager-backend:latest
+
+      - name: Pull frontend image
+        run: |
+          docker pull ghcr.io/lujain-77/secure-task-manager-frontend:latest
+
+      - name: Run Trivy on backend image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest \
+            image \
+            --format table \
+            ghcr.io/lujain-77/secure-task-manager-backend:latest \
+            > trivy-backend-report.txt 2>&1 || true
+
+      - name: Run Trivy on frontend image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest \
+            image \
+            --format table \
+            ghcr.io/lujain-77/secure-task-manager-frontend:latest \
+            > trivy-frontend-report.txt 2>&1 || true
+
+          echo "Trivy scan completed."
+
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: |
+            trivy-backend-report.txt
+            trivy-frontend-report.txt
+          if-no-files-found: warn
